@@ -1,10 +1,16 @@
 {
-    "name": "notion-example",
-    "type": "module",
+    "name": "notion-duplicate-db",
     "version": "1.0.0",
     "description": "",
     "main": "index.js",
     "dependencies": {
-        "@notionhq/client": "^0.1.9"
+        "@notionhq/client": "^0.1.9",
+        "aws-sdk": "^2.1065.0"
+    },
+    "scripts": {
+        "test": "npx run-func index.js handler",
+        "zip": "zip -r function.zip ./index.js node_modules/",
+        "update-lambda": "aws lambda update-function-code --function-name notionDuplicateDB --zip-file fileb://function.zip",
+        "deploy": "npm run zip && npm run update-lambda"        
     }
 }
