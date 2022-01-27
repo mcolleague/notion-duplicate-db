@@ -25,7 +25,8 @@ const dbsSearchObj = {
         value: 'database'
     }
 }
-const cloneTaskToSharedDecorator = (database_id) => (task, i) => {
+
+const toClonedTaskDecorator = (database_id) => async (task) => {
     const props = [
         "Status",
         "Due",
@@ -51,10 +52,10 @@ const cloneTaskToSharedDecorator = (database_id) => (task, i) => {
         }           
     })
 
-    notion.pages.create({
+    await notion.pages.create({
         parent: { database_id },
         properties: props      
-    })     
+    })
 }
 
 exports.handler = async (event, context, callback) => {
@@ -76,7 +77,9 @@ exports.handler = async (event, context, callback) => {
     const tasksQueryObj = getTasksQueryObj(dbsMap.tasks.main)
     const tasksQuery = await notion.databases.query(tasksQueryObj)
     const tasks = tasksQuery.results
+    const clonedTasks = await Promise.all(tasks.map(toClonedTaskDecorator(dbsMap.tasks.shared)))
+    const success = `Successfully cloned ${clonedTasks.length} tasks`
 
-    tasks.forEach(cloneTaskToSharedDecorator(dbsMap.tasks.shared))
-    return 'Success'
+    console.log(success)
+    return success
 }
