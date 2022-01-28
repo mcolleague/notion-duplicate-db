@@ -2,22 +2,18 @@ const { Client } = require('@notionhq/client')
 const notion = new Client({ auth: process.env.NOTION_KEY })
 const AWS = require('aws-sdk');
 
-const dbByTitleFilter = (str) => ({ title: [{plain_text}] }) => plain_text === str
-const getTasksQueryObj = (dbId) => ({
-    database_id: dbId,
-    filter: {
-        or: [
-            {
-                property: "Is shared",
-                formula: {
-                    checkbox: {
-                        equals: true
-                    }
+const taskIsSharedFilter = {
+    or: [
+        {
+            property: "Is shared",
+            formula: {
+                checkbox: {
+                    equals: true
                 }
             }
-        ]
-    }
-})
+        }
+    ]
+}
 const dbsSearchObj = { 
     query: '', 
     filter: {
@@ -26,8 +22,12 @@ const dbsSearchObj = {
     }
 }
 
-const toClonedTaskDecorator = (database_id) => async (task) => {
-    const props = [
+const toClonedTaskDecorator = (inputs) => async ({ id: mainTaskId, properties }) => {
+    const { sharedTasks, sharedTaskDBId } = inputs
+    const existingClonedTask = sharedTasks.find(({properties}) => {
+        return properties["Cloned from"]?.relation[0]?.id === mainTaskId
+    })
+    const clonedProps = [
         "Status",
         "Due",
         "Tags",
@@ -35,7 +35,7 @@ const toClonedTaskDecorator = (database_id) => async (task) => {
         "Theme",
         "Assignee",
     ].reduce((prev, key) => {
-        const matchedProp = task.properties[key]
+        const matchedProp = properties[key]
         const type = matchedProp?.type
         return matchedProp 
             ? { ...prev, [key]: {[type]: matchedProp[type]} }
@@ -45,41 +45,55 @@ const toClonedTaskDecorator = (database_id) => async (task) => {
             title: [
                 {
                     "text": {
-                        "content": task.properties.Name.title[0].plain_text
+                        "content": properties.Name.title[0].plain_text
                     }
+                }
+            ]
+        },
+        "Cloned from": {
+            relation: [
+                {
+                    id: mainTaskId        
                 }
             ]
         }           
     })
-
-    await notion.pages.create({
-        parent: { database_id },
-        properties: props      
-    })
+    
+    if (existingClonedTask) {
+        await notion.pages.update({ 
+            page_id: existingClonedTask.id, 
+            properties: clonedProps
+        })
+    } else {
+        await notion.pages.create({ 
+            parent: { database_id: sharedTaskDBId }, 
+            properties: clonedProps 
+        })
+    }
 }
 
 exports.handler = async (event, context, callback) => {
-    const dbsSearch = await notion.search(dbsSearchObj)
-    const dbs = dbsSearch.results
-    const dbsMap = {
-        tasks: {
-            main: dbs.find(dbByTitleFilter("Tasks")).id,
-            shared: dbs.find(dbByTitleFilter("Tasks (shared)")).id
-        },
-        projects: {
-            main: dbs.find(dbByTitleFilter("Projects")).id
-        },
-        rules: {
-            main: dbs.find(dbByTitleFilter("Rules")).id
-        }
-    }
+    const { results: dbsSearch } = await notion.search(dbsSearchObj)
+    const getDBId = (dbTitle) => dbsSearch.find(({ title: [{ plain_text }]}) => plain_text === dbTitle).id
+    const mainTaskDBId = getDBId("Tasks")
+    const sharedTaskDBId = getDBId("Tasks (shared)")
 
-    const tasksQueryObj = getTasksQueryObj(dbsMap.tasks.main)
-    const tasksQuery = await notion.databases.query(tasksQueryObj)
-    const tasks = tasksQuery.results
-    const clonedTasks = await Promise.all(tasks.map(toClonedTaskDecorator(dbsMap.tasks.shared)))
-    const success = `Successfully cloned ${clonedTasks.length} tasks`
+    // Tasks in the main DB marked for sharing
+    const { results: mainTasks } = await notion.databases.query({ 
+        database_id: mainTaskDBId,
+        filter: taskIsSharedFilter
+    })
 
-    console.log(success)
-    return success
+    // Tasks currently in the shared DB
+    const { results: sharedTasks } = await notion.databases.query({
+        database_id: sharedTaskDBId
+    })
+
+    const clonedTasks = await Promise.all(mainTasks.map(toClonedTaskDecorator(
+        { sharedTasks, sharedTaskDBId }
+    )))
+
+    const msg = `Successfully synced ${clonedTasks.length} tasks`
+    console.log(msg)
+    return msg
 }
